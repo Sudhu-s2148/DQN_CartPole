@@ -143,6 +143,7 @@ class CircleShape:
     def __init__(self, radius, color=(255, 0, 0)):
         self.radius = radius
         self.color = color
+
 class RigidBody:
     def __init__(self, shape, M, I, damping=1, pos=None, theta=0, static=False, rotatable=True):
 
@@ -514,13 +515,6 @@ class RigidBody:
                           [0, -1, -r_a[0], 0, 1, r_b[0]]]), bias)
 
 
-#part of RL
-class state:
-    def __init__(self, pos, vel, theta, omega):
-        self.pos = box.pos[0]
-        self.vel = box.vel[0]
-        self.theta = rod.theta
-        self.omega = rod.omega
 
 #walls
 wall_r = RigidBody(shape=PolygonShape(points=[(50, -HEIGHT/2), (-50, -HEIGHT/2), (-50, HEIGHT/2), (50, HEIGHT/2)], color=(0, 0, 0, 0)), 
@@ -587,7 +581,7 @@ while run:
                 box.add_impulse([J2]) """
 
 
-    state_before_action = state
+
     for obj in objects:
         obj.add_force([Vec2(obj.pos, [0, obj.M * 981])])
 
@@ -603,7 +597,7 @@ while run:
     
     box.solve_one_body_constraint(*box.one_body_prismatic(local_pos=[0, 0], dt=dt, y=HEIGHT/2))
     rod.solve_two_body_constraint(box, *rod.two_body_revolute(box, [0, -50], [0, 0]))
-    state_after_action = state
+
     for i in range(len(walls)):
         for j in range(len(objects)):
             npc = walls[i].collision_check(objects[j])
