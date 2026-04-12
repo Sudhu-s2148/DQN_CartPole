@@ -1,7 +1,20 @@
+import torch
 import pygame as pg
 import math
 import numpy as np
 import random
+
+import agent as A
+import train
+import buffer
+
+online_network = A.agent()
+offline_network = A.agent()
+experiences = buffer.Buffer()
+optimizer = torch.optim.Adam(online_network.parameters(), lr=0.001)
+gamma = 0.99
+epsilon = 1
+done=False
 
 WIDTH, HEIGHT = 800, 800
 PI = 3.141592653589
@@ -568,88 +581,123 @@ run = True
 
 debug_contacts = []
 DEBUG_LIFETIME = 100
-state_before_action = [box.pos[0], box.vel[0], rod.theta, rod.omega]
+
+training = True
+steps = 0
+min_exp = 64
+max_steps = 500
+episodes = 0
+max_episodes = 0
+
 while run:
+    steps += 1
+
     for obj in all_objects:
         obj.clear_forces()
-
     J = Vec2(box.pos, [10, 0])
     J2 = Vec2(box.pos, [-10, 0])
 
+    # always handle quit
     for event in pg.event.get():
         if event.type == pg.QUIT:
             run = False
 
-        # tap key to apply impulse
-        """ if event.type == pg.KEYDOWN:
-            if event.key == pg.K_d:
-                 box.add_impulse([J])
-            elif event.key == pg.K_a:
-                box.add_impulse([J2]) """
-
     for obj in objects:
         obj.add_force([Vec2(obj.pos, [0, obj.M * 981])])
-    # this can be completely converted to RL decision later by having the selection statements based on 0,1,2 itself
-    action = random.randint(0, 2)
-    # hold key to apply impulse
-    """keys = pg.key.get_pressed()
-    if keys[pg.K_d]:
-        box.add_impulse([J])
 
-    if keys[pg.K_a]:
-        box.add_impulse([J2])"""
+    if training:
+        state = [box.pos[0], box.vel[0], rod.theta, rod.omega]
+        state_tensor = torch.tensor(state, dtype=torch.float32)
 
-    if action == 0:
-        box.add_impulse([J])
+        action = online_network.choice(state_tensor, epsilon)
 
-    if action == 1:
-        box.add_impulse([J2])
-    box.solve_one_body_constraint(*box.one_body_prismatic(local_pos=[0, 0], dt=dt, y=HEIGHT / 2))
-    rod.solve_two_body_constraint(box, *rod.two_body_revolute(box, [0, -50], [0, 0]))
-    state = [box.pos[0], box.vel[0], rod.theta, rod.omega]
-    for i in range(len(walls)):
-        for j in range(len(objects)):
-            npc = walls[i].collision_check(objects[j])
-            if npc:
-                n, p, c = npc
-                walls[i].resolve_collision(objects[j], n, p, c)
-                for k in c:
-                    debug_contacts.append([k, DEBUG_LIFETIME])
+        if action == 0:
+            box.add_impulse([J])
+        elif action == 1:
+            box.add_impulse([J2])
 
-    for object in all_objects:
-        object.update(dt)
+        box.solve_one_body_constraint(*box.one_body_prismatic(local_pos=[0, 0], dt=dt, y=HEIGHT / 2))
+        rod.solve_two_body_constraint(box, *rod.two_body_revolute(box, [0, -50], [0, 0]))
 
-    screen.fill((100, 100, 100))
+        next_state = [box.pos[0], box.vel[0], rod.theta, rod.omega]
+        reward, fallen = train.compute_reward(state_tensor)
 
-    pg.draw.line(screen, (0, 0, 0), (0, HEIGHT / 2), (WIDTH, HEIGHT / 2), 2)
+        if steps >= max_steps or fallen:
+            done = True
 
-    for i in range(len(debug_contacts) - 1, -1, -1):
-        point = debug_contacts[i][0]
-        life = debug_contacts[i][1]
+        experiences.push(state, action, next_state, reward, done)
+        optimizer.zero_grad()
+        if len(experiences) > min_exp:
+            batch = experiences.sample(64)
+            loss = train.bellmans_update(online_network, offline_network, batch, gamma)
+            loss.backward()
+            optimizer.step()
 
-        draw_x, draw_y = int(point[0]), int(point[1])
+        for i in range(len(walls)):
+            for j in range(len(objects)):
+                npc = walls[i].collision_check(objects[j])
+                if npc:
+                    n, p, c = npc
+                    walls[i].resolve_collision(objects[j], n, p, c)
 
-        color_val = int((life / DEBUG_LIFETIME) * 255)
-        color = (color_val, color_val, color_val)
+        for object in all_objects:
+            object.update(dt)
 
-        pg.draw.circle(screen, color, (draw_x, draw_y), 4)
+        if done:
+            box.pos = [WIDTH / 2, HEIGHT / 2]
+            box.vel = [0, 0]
+            rod.theta = math.pi
+            rod.omega = 0
+            steps = 0
+            episodes += 1
+            epsilon *= 0.99
+            offline_network.load_state_dict(online_network.state_dict())
+            done = False
+            print(f"episode: {episodes}/{max_episodes}")
 
-        debug_contacts[i][1] -= 1
+        if episodes >= max_episodes:
+            training = False
+            torch.save(offline_network.state_dict(), "trained_model.pth")
 
-        if debug_contacts[i][1] <= 0:
-            debug_contacts.pop(i)
+    else:
+        # watch mode - use trained network
+        print(f"theta: {rod.theta:.3f}, normalized: {rod.theta % (2 * math.pi):.3f}")
 
-    for object in all_objects:
-        object.draw_body(screen, object.shape.color)
+        state = [box.pos[0], box.vel[0], rod.theta, rod.omega]
+        state_tensor = torch.tensor(state, dtype=torch.float32)
+        action = offline_network.choice(state_tensor, 0)  # epsilon=0, pure exploitation
 
-    current_fps = str(int(clock.get_fps()))
+        if action == 0:
+            box.add_impulse([J])
+        elif action == 1:
+            box.add_impulse([J2])
 
-    fps_surface = my_font.render(f"FPS: {current_fps}", True, (255, 255, 0))
+        box.solve_one_body_constraint(*box.one_body_prismatic(local_pos=[0, 0], dt=dt, y=HEIGHT / 2))
+        rod.solve_two_body_constraint(box, *rod.two_body_revolute(box, [0, -50], [0, 0]))
 
-    screen.blit(fps_surface, (10, 10))
+        for i in range(len(walls)):
+            for j in range(len(objects)):
+                npc = walls[i].collision_check(objects[j])
+                if npc:
+                    n, p, c = npc
+                    walls[i].resolve_collision(objects[j], n, p, c)
 
-    pg.display.flip()
-    clock.tick(fps)
+        for object in all_objects:
+            object.update(dt)
+
+        # rendering
+        screen.fill((100, 100, 100))
+        pg.draw.line(screen, (0, 0, 0), (0, HEIGHT / 2), (WIDTH, HEIGHT / 2), 2)
+
+        for object in all_objects:
+            object.draw_body(screen, object.shape.color)
+
+        current_fps = str(int(clock.get_fps()))
+        fps_surface = my_font.render(f"FPS: {current_fps}", True, (255, 255, 0))
+        screen.blit(fps_surface, (10, 10))
+
+        pg.display.flip()
+        clock.tick(fps)
 
 pg.quit()
 
