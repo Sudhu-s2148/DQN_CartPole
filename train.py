@@ -27,27 +27,14 @@ def bellmans_update(active_network,dormant_network,buffer_exp,gamma,device):
 
 def compute_reward(state_tensor):
     theta_normalized = state_tensor[2].item() % (2 * math.pi)
-    upright = abs(theta_normalized - math.pi) < 0.8
+    angle = abs(theta_normalized - math.pi)
+    out_of_bounds = state_tensor[0].item() < 200 or state_tensor[0].item() > 600
+    fallen = angle > 0.9 or out_of_bounds
 
-    out_of_bounds = state_tensor[0].item() < 150 or state_tensor[0].item() > 650
-    fallen = not upright or out_of_bounds
-
-    angle_reward = 1 - abs(theta_normalized - math.pi) / math.pi
-    position_reward = 1 - abs(state_tensor[0].item() - 400) / 400
-    wall_distance = abs(state_tensor[0].item() - 400) / 400
-    wall_penalty = wall_distance ** 2
-
-    if upright:
-        stillness_bonus = 1 / (1 + abs(state_tensor[1].item()) * 0.1)
-        velocity_penalty = (abs(state_tensor[1].item()) / 60) ** 2 * 2
-        rew = 2*angle_reward + position_reward + stillness_bonus - velocity_penalty - 4*wall_penalty
+    if fallen:
+        return -10.0, True
     else:
-        velocity_penalty = (abs(state_tensor[1].item()) / 60) ** 2
-        rew = 2*angle_reward + position_reward - velocity_penalty - 4*wall_penalty
-
-    if out_of_bounds:
-        rew = -20
-
-    return rew, fallen
-
+        # +1 at perfectly upright, smoothly decreasing to ~0.4 at angle=0.9
+        rew = 1.0 - (angle / 0.9)
+        return rew, False
 
