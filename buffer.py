@@ -2,7 +2,7 @@ from collections import deque
 import random
 class Buffer:
     def __init__(self):
-        self.deq = deque(maxlen = 10000)
+        self.deq = deque(maxlen = 100000)
     def __len__(self):
         return len(self.deq)
     def push(self, state, action, next_state, reward, done):
