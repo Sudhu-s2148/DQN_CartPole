@@ -18,6 +18,6 @@ class agent(nn.Module):
   def choice(self,state,epsilon):
     if random.random()>epsilon:
       with torch.no_grad():
-        return torch.argmax(self.forward(state)).item()
+        return torch.argmax(self.forward(state))
     else:
       return random.randint(0,1)
