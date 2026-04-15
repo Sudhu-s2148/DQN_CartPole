@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import gymnasium
 import os
+import math
 
 training = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -17,11 +18,11 @@ experiences = buffer.Buffer()
 gamma = 0.99
 epsilon = 1
 epsilon_min = .05
-decay = .9995
+decay = .999
 episode = 5000
 step = 500
 
-optimizer = torch.optim.Adam(online_network.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(online_network.parameters(), lr=0.0005)
 
 def bellmans_update(active_network,dormant_network,buffer_exp,gamma, device):
 
@@ -31,13 +32,11 @@ def bellmans_update(active_network,dormant_network,buffer_exp,gamma, device):
     rewards_batch = torch.tensor([t[3] for t in buffer_exp], dtype=torch.float32).to(device)
     dones_batch = torch.tensor([t[4] for t in buffer_exp], dtype=torch.float32).to(device)
 
-    # target — computed from target network, no gradients needed
     with torch.no_grad():
         max_Q = dormant_network.forward(next_states_batch).max(dim=1).values
         max_Q = max_Q * (1 - dones_batch)
         target = rewards_batch + gamma * max_Q
 
-    # prediction — computed from online network, gradients ARE needed
     predicted = active_network.forward(states_batch).gather(1, actions_batch.unsqueeze(1)).squeeze(1)
 
     # loss — PyTorch tracks gradients through predicted
@@ -47,11 +46,11 @@ def bellmans_update(active_network,dormant_network,buffer_exp,gamma, device):
 total_overall_steps = 0
 total_steps = 0
 best_avg_reward = 0
+save_path = "best_agent2.pth"
 #episode loop
 if training:
     print("started")
     for j in range(episode):
-        save_path = "best_agent.pth"
         step_count = 0
         state,_ = env.reset()
         state_tensor = torch.tensor(state, dtype=torch.float32).to(device)
@@ -60,6 +59,12 @@ if training:
             step_count+=1
             action = online_network.choice(state_tensor,epsilon)# forward pass
             next_state, reward, terminated, truncated, _ = env.step(action)
+            angle = next_state[2]
+
+            if terminated or truncated:
+                reward = -10  # penalty for falling
+            else:
+                reward = math.cos(angle)
             experiences.push(state,action,next_state,reward,terminated)
 
             state = next_state
@@ -69,6 +74,7 @@ if training:
                 optimizer.zero_grad()  # reset gradients
                 loss = bellmans_update(online_network,offline_network,batch,gamma,device) # compute loss
                 loss.backward() # compute gradients
+                torch.nn.utils.clip_grad_norm_(online_network.parameters(), 10)
                 optimizer.step()# update weights
 
             if total_overall_steps % 1000 == 0:
@@ -84,7 +90,7 @@ if training:
                 best_avg_reward = current_avg
                 torch.save(online_network.state_dict(), save_path)
                 print(f"--> New Best Model Saved! Avg Steps: {best_avg_reward:.1f}")
-            print(f"Episode: {j+1} | Avg Steps (last 100): {total_steps/100:.1f} | Epsilon: {epsilon:.3f}")
+            print(f"Episode: {j + 1} | Avg Steps: {total_steps / 100:.1f} | Epsilon: {epsilon:.3f} | Loss: {loss.item():.4f}")
             total_steps = 0
 
         epsilon = max(epsilon * decay, epsilon_min)
@@ -92,8 +98,8 @@ if training:
 else:
     model = A.agent()
     model.to(device)
-    if os.path.exists("best_cartpole_model.pth"):
-        model.load_state_dict(torch.load("best_cartpole_model.pth", map_location=device))
+    if os.path.exists("best_agent.pth"):
+        model.load_state_dict(torch.load("best_agent.pth", map_location=device))
         model.eval()
         print("Model loaded successfully!")
     else:
