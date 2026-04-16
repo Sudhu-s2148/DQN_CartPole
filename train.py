@@ -7,11 +7,12 @@ import gymnasium
 import os
 import math
 
-training = True
+training = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
 env = gymnasium.make("CartPole-v1")
+env.unwrapped.theta_threshold_radians = math.radians(20)
 online_network = A.agent().to(device)
 offline_network = A.agent().to(device)
 experiences = buffer.Buffer()
@@ -46,7 +47,7 @@ def bellmans_update(active_network,dormant_network,buffer_exp,gamma, device):
 total_overall_steps = 0
 total_steps = 0
 best_avg_reward = 0
-save_path = "best_agent2.pth"
+save_path = "best_agent3.pth"
 #episode loop
 if training:
     print("started")
@@ -61,10 +62,12 @@ if training:
             next_state, reward, terminated, truncated, _ = env.step(action)
             angle = next_state[2]
 
-            if terminated or truncated:
-                reward = -10  # penalty for falling
+            if terminated:
+                reward_to_store = -5.0
+            elif truncated:
+                reward_to_store = 1.0
             else:
-                reward = math.cos(angle)
+                reward_to_store = math.cos(angle)
             experiences.push(state,action,next_state,reward,terminated)
 
             state = next_state
@@ -98,8 +101,8 @@ if training:
 else:
     model = A.agent()
     model.to(device)
-    if os.path.exists("best_agent.pth"):
-        model.load_state_dict(torch.load("best_agent.pth", map_location=device))
+    if os.path.exists(save_path):
+        model.load_state_dict(torch.load(save_path, map_location=device))
         model.eval()
         print("Model loaded successfully!")
     else:
